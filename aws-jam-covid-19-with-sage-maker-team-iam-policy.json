@@ -1,0 +1,19 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Action": [
+        "s3:CreateBucket",
+        "s3:PutObject",
+        "s3:GetBucket",
+        "s3:ListBucket",
+        "s3:*",
+        "logs:Describe*",
+        "logs:Get*",
+        "sagemaker:*"
+      ],
+      "Resource": "*",
+      "Effect": "Allow"
+    }
+  ]
+}
