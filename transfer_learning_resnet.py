@@ -21,6 +21,7 @@ logger.setLevel(logging.INFO)
 logger.addHandler(logging.StreamHandler(sys.stdout))
 
 Image.MAX_IMAGE_PIXELS = None
+NUM_CLASS = 4
 
 """
 Method to augment and load data on CPU with PyTorch Dataloaders
@@ -28,7 +29,6 @@ Method to augment and load data on CPU with PyTorch Dataloaders
 
 
 def augmentation_pytorch(train_dir, batch_size, workers, is_distributed, use_cuda):
-    print ("Image augmentation using PyTorch Dataloaders on CPUs")
     aug_ops = [
         transforms.RandomHorizontalFlip(),
         transforms.RandomVerticalFlip(),
@@ -64,7 +64,18 @@ def augmentation_pytorch(train_dir, batch_size, workers, is_distributed, use_cud
     dataset_sizes = {x: len(image_datasets[x]) for x in ['train', 'val']}
     return dataloaders, dataset_sizes
 
+"""
+--------------------------------
+Method to save the trained model
+--------------------------------
+"""
 
+def save_model(model_dir, model_ft):
+    logger.info("Saving the model.")
+    path = os.path.join(model_dir, 'model.pth')
+    torch.save(model_ft.cpu().state_dict(), path)
+    
+    
 """
 Method to train models for number of epochs
 """
@@ -131,7 +142,8 @@ def training(args):
     hosts = args.hosts
     current_host = args.current_host
     backend = args.backend
-    seed = args.seed
+    seed = args.seed    
+    model_dir = args.model_dir
 
     is_distributed = len(hosts) > 1 and backend is not None
     logger.debug("Distributed training - {}".format(is_distributed))
@@ -189,7 +201,61 @@ def training(args):
                                              dataset_sizes,
                                              device)
     time_elapsed = time.time() - since
+    
+    # Saving model
+    save_model(model_dir, model_ft)
 
+
+def input_fn(request_body, request_content_type):
+    
+    data_transform=transforms.Compose([transforms.RandomResizedCrop(224),
+                                       transforms.ToTensor(),
+                                       transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225])
+    ])
+
+    if request_content_type == 'application/x-image': 
+        image_as_bytes = io.BytesIO(request_body)
+        image = Image.open(image_as_bytes)
+        image_transformed = data_transform(image)
+        image_tensor = image_transformed.unsqueeze(dim=0)
+    else:
+        print("not support this type yet")
+        raise ValueError("not support this type yet")
+        
+    return image_tensor
+
+
+def model_fn(model_dir):
+    
+    model_ft = models.resnet18(pretrained=False)
+    for param in model_ft.features.parameters():
+            param.require_grad = False
+    num_ftrs = model_ft.classifier[6].in_features
+    features = list(model_ft.classifier.children())[:-1]
+    features.extend([nn.Linear(num_ftrs, NUM_CLASS)]) 
+    model_ft.classifier = nn.Sequential(*features)
+    
+    model_ft = nn.DataParallel(model_ft)
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    model_ft = model_ft.to(device) 
+    
+    with open(os.path.join(model_dir, 'model.pth'), 'rb') as f:
+        model_ft.load_state_dict(torch.load(f))
+    return model_ft
+
+
+def predict_fn(input_data, model):
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    model.to(device)
+    model.eval()
+    output = model(input_data)
+    pred = output.max(1, keepdim=True)[1]
+    return pred
+
+def output_fn(prediction, content_type):
+     return json.dumps(prediction)
+
+    
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
@@ -204,7 +270,7 @@ if __name__ == '__main__':
                         help='SGD momentum (default: 0.5)')
     parser.add_argument('--seed', type=int, default=42, metavar='S',
                         help='random seed (default: 42)')
-    parser.add_argument('--backend', type=str, default=None,
+    parser.add_argument('--backend', type=str, default='nccl',
                         help='backend for distributed training (tcp, gloo on cpu and gloo, nccl on gpu)')
 
     parser.add_argument('--hosts', type=list, default=json.loads(os.environ['SM_HOSTS']))
