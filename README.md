@@ -6,7 +6,7 @@
 
 
 - Using SM Notebook with the CF `aws-jam-covid-19-with-sage-maker-cfn-template.yaml` `and aws-jam-covid-19-with-sage-maker-team-iam-policy.json`
-- Toy Dataset fetched into S3 bucket from [Covid-19 Image Dataset](https://www.kaggle.com/pranavraikokte/covid19-image-dataset): 3 Way Classification - COVID-19, Viral Pneumonia, Normal
+- Dataset fetched into S3 bucket from [COVID-19 Radiography Database](https://www.kaggle.com/tawsifurrahman/covid19-radiography-database): 4 Way Classification - COVID-19, Lunch Opacity, Normal, Viral Pneumonia
 - Sample Notebook WIP: [get-started.ipynb](https://github.com/sayonkumarsaha/sagemaker-covid19-detection/blob/main/get-started.ipynb)
 
 ## License
