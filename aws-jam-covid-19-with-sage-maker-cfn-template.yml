@@ -1,6 +1,6 @@
 AWSTemplateFormatVersion: '2010-09-09'
 Description: 'Custom resource to create a SageMaker notebook. License: (MIT-0: https://github.com/aws/mit-0) (qs-1o9abmj8n)'
-Metadata:
+Metadata: #we strongly recommend you do not use this section to store sensitive information, such as passwords or secrets.
   AWS::CloudFormation::Interface:
     ParameterGroups:
       - Label:
@@ -139,8 +139,8 @@ Resources:
                   Action:
                     - s3:*
                   Resource:
-                    - !Sub 'arn:aws:s3:::${SageMakerS3Bucket}'
-                    - !Sub 'arn:aws:s3:::${SageMakerS3Bucket}/*'
+                    - !Sub 'arn:aws:s3:::*'
+                    - !Sub 'arn:aws:s3:::*/*'
         - Ref: AWS::NoValue
   NotebookCloudWatchLogGroup:
     Type: AWS::Logs::LogGroup
@@ -267,6 +267,186 @@ Resources:
         - !Ref 'SageMakerRoleArn'
         - !GetAtt 'SageMakerExecutionRole.Arn'
       Version: 1
+  ConfigRecorder:
+    Type: "AWS::Config::ConfigurationRecorder"
+    Properties:
+      Name: default
+      RecordingGroup:
+        AllSupported: true
+        IncludeGlobalResourceTypes: true
+      RoleARN:
+        Fn::GetAtt:
+          - ConfigRole
+          - Arn
+  ConfigRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+        - Effect: Allow
+          Principal:
+            Service:
+            - config.amazonaws.com
+          Action:
+          - sts:AssumeRole
+      Path: "/"
+  RolePolicies:
+    Type: AWS::IAM::Policy
+    Properties:
+      PolicyName: AWSConfig-S3-AccessPolicy
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+        - Effect: Allow
+          Action:
+          - Config:*
+          - EC2:*
+          - Iam:*
+          - elasticloadbalancing:*
+          - S3:*
+          - cloudtrail:Desc*
+          - ssm:*
+          Resource: "*"
+      Roles:
+      - !Ref ConfigRole
+  DeliveryChannel:
+    Type: "AWS::Config::DeliveryChannel"
+    Properties:
+      ConfigSnapshotDeliveryProperties:
+        DeliveryFrequency: "Six_Hours"
+      S3BucketName:
+        Ref: ConfigBucket
+  ConfigBucket:
+    Type: "AWS::S3::Bucket"
+    DeletionPolicy: Retain
+  
+  CopyCodeLambdaExecutionRole:
+    Type: "AWS::IAM::Role"
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - lambda.amazonaws.com
+            Action:
+              - sts:AssumeRole
+      Path: "/"
+      Policies:
+        - PolicyName: root
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource: arn:aws:logs:*:*:*
+              - Effect: Allow
+                Action:
+                  - s3:*
+                Resource: "*"
+  
+  CopyCodeLambda:
+    Type: "AWS::Lambda::Function"
+    Properties:
+      Code:
+        ZipFile: |
+          import json
+          import cfnresponse
+          import boto3
+          import time
+          import zipfile
+          from io import BytesIO
+          #import sagemaker
+
+          def lambda_handler(event, context):
+            try:
+              s3 = boto3.resource('s3')
+              ## init source client
+              #copy_source = {
+              #      'Bucket': event['ResourceProperties']['S3Bucket'],
+              #      'Key': event['ResourceProperties']['S3Key']
+              #    }
+
+              region = event['ResourceProperties']['Region']
+              s3_client = boto3.client('s3', region_name=region)
+              
+              #new-code-starts
+              # get sagemaker session
+              #session = sagemaker.Session()
+              # create a sagemaker default bucket
+              #default_bucket = session.default_bucket() 
+              #dest_bucket_name = default_bucket
+              #new-code-ends
+
+              # init target client
+              #dest_bucket_name = 'jam-challenge-{region}-{date}'.format(region=region, date=int(time.time()))
+              client = boto3.client('sts')
+              account_id = client.get_caller_identity()['Account']
+              dest_bucket_name= 'sagemaker-us-east-1-{account_id}'.format(account_id=account_id)
+              
+              # create bucket
+              if region == 'us-east-1':
+                s3_client.create_bucket(Bucket=dest_bucket_name)
+              else:
+                s3_client.create_bucket(Bucket=dest_bucket_name, CreateBucketConfiguration={'LocationConstraint': region})
+
+              dest_bucket = s3.Bucket(dest_bucket_name)
+              #dest_bucket.copy(copy_source, event['ResourceProperties']['S3Key']) #copy single file
+
+              ## copy every file in the s3 bucket
+              ## iterate all objects in your S3 bucket over the for Loop
+              src_bucket = s3.Bucket(event['ResourceProperties']['S3Bucket'])
+              old_prefix = event['ResourceProperties']['S3Key']
+              _list = src_bucket.objects.filter(Prefix=old_prefix)
+              #for _file in src_bucket.objects.filter(Prefix=old_prefix):
+                #print("A")
+                # if "hint" not in file.key: 
+                ## Create a Source Dictionary That Specifies Bucket Name and Key Name of the Object to Be Copied
+                #copy_source = {'Bucket': event['ResourceProperties']['S3Bucket'],'Key': _file.key}
+                #dest_obj = dest_bucket.Object(_file.key)
+                #dest_obj.copy(copy_source)
+                #print(file.key +'- File Copied')
+              ##
+              
+              # copy zip file from source S3 to local acc S3
+              DATASET_SOURCE = {
+                  'Bucket': 'aws-jam-challenge-resources',
+                  'Key': 'covid-19-with-sage-maker/radiography_train_data_10.zip'
+              }
+              ZIP_FILE = 'dataset/radiography_train_data_10.zip'
+              dest_bucket.copy(DATASET_SOURCE, ZIP_FILE)
+              
+              ## end of the event
+              responseValue = dest_bucket_name
+              responseData = {}
+              responseData['Data'] = responseValue
+              cfnresponse.send(event, context, cfnresponse.SUCCESS, responseData, "CopyCodeRun")
+            except Exception as inst:
+                print(inst)
+                cfnresponse.send(event, context, cfnresponse.FAILED, {})
+
+      Handler: "index.lambda_handler"
+      Runtime: python3.6
+      Timeout: 60
+      Role: !GetAtt CopyCodeLambdaExecutionRole.Arn
+
+  # can be optimize later
+  CopyCodeRun: #copy cf-1
+    Type: "AWS::CloudFormation::CustomResource"
+    DependsOn:
+      - CopyCodeLambdaExecutionRole
+      - CopyCodeLambda
+    Properties:
+      ServiceToken: !GetAtt CopyCodeLambda.Arn
+      S3Bucket: !Sub 'aws-jam-challenge-resources-${AWS::Region}'
+      S3Key: !Sub 'covid-19-with-sage-maker/'
+      Region: !Ref AWS::Region
+
 Outputs:
   NotebookARN:
     Description: SageMaker Notebook ARN
