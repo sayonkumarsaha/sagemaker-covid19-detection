@@ -361,7 +361,6 @@ Resources:
           import time
           import zipfile
           from io import BytesIO
-          #import sagemaker
 
           def lambda_handler(event, context):
             try:
@@ -416,9 +415,9 @@ Resources:
               # copy zip file from source S3 to local acc S3
               DATASET_SOURCE = {
                   'Bucket': 'aws-jam-challenge-resources',
-                  'Key': 'covid-19-with-sage-maker/radiography_train_data_10.zip'
+                  'Key': 'covid-19-with-sage-maker/radiography_train_data.zip'
               }
-              ZIP_FILE = 'dataset/radiography_train_data_10.zip'
+              ZIP_FILE = 'radiography_train_data.zip'
               dest_bucket.copy(DATASET_SOURCE, ZIP_FILE)
               
               ## end of the event
@@ -432,7 +431,7 @@ Resources:
 
       Handler: "index.lambda_handler"
       Runtime: python3.6
-      Timeout: 60
+      Timeout: 900
       Role: !GetAtt CopyCodeLambdaExecutionRole.Arn
 
   # can be optimize later
